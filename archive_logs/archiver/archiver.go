@@ -31,10 +31,10 @@ type Archiver struct {
 
 // New создает новый экземпляр архиватора
 func New() *Archiver {
-	// Получаем текущую директорию для создания локального лога
-	workDir, err := os.Getwd()
+	// Получаем домашнюю директорию пользователя для создания локального лога
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		workDir = "." // Fallback к текущей директории
+		homeDir = "." // Fallback к текущей директории
 	}
 
 	return &Archiver{
@@ -43,7 +43,7 @@ func New() *Archiver {
 		stateFile:     STATE_FILE,
 		positionFile:  POSITION_FILE,
 		tempHourlyLog: TEMP_HOURLY_LOG,
-		localLogFile:  filepath.Join(workDir, "archiver.log"),
+		localLogFile:  filepath.Join(homeDir, "archiver.log"),
 	}
 }
 

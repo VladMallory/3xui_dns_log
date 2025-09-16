@@ -24,7 +24,8 @@ go run main.go
 ```bash
 cd ~/tools/3xui_dns_log/archive_logs
 go run main.go
-$ sudo cp /root/tools/3xui_dns_log/archive_logs/xui_log_archiver /usr/local/bin/xui_log_archiver
+go build -o xui_log_archiver main.go 
+cp /root/tools/3xui_dns_log/archive_logs/xui_log_archiver /usr/local/bin/xui_log_archiver
 chmod +x /usr/local/bin/xui_log_archiver
 ```
 - На этапе `go run main.go` выбрать 3, потом 2 пункт
