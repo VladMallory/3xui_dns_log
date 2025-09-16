@@ -87,10 +87,10 @@ func (a *Archiver) RunArchiving() error {
 		fmt.Printf("Архивирование произойдет в %d минут следующего часа (в 00 минут)\n", 60-currentMinute)
 	}
 
-	// Очистка старых архивов (старше 30 дней)
-	if err := a.cleanupOldArchives(); err != nil {
-		return fmt.Errorf("ошибка очистки старых архивов: %v", err)
-	}
+	// Очистка старых архивов отключена - архивы сохраняются навсегда
+	// if err := a.cleanupOldArchives(); err != nil {
+	//	return fmt.Errorf("ошибка очистки старых архивов: %v", err)
+	// }
 
 	a.logInfo("Процесс архивирования завершен")
 	fmt.Println("Архивирование завершено успешно!")
