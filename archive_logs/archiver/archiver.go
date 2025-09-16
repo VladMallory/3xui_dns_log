@@ -15,6 +15,7 @@ const (
 	LOG_FILE        = "/usr/local/x-ui/access.log"
 	ARCHIVE_DIR     = "/usr/local/x-ui/archives"
 	STATE_FILE      = "/usr/local/x-ui/last_archived_line.txt"
+	POSITION_FILE   = "/usr/local/x-ui/last_archived_position.txt"
 	TEMP_HOURLY_LOG = "/usr/local/x-ui/temp_hourly_archive.log"
 )
 
@@ -23,6 +24,7 @@ type Archiver struct {
 	logFile       string
 	archiveDir    string
 	stateFile     string
+	positionFile  string
 	tempHourlyLog string
 	localLogFile  string
 }
@@ -39,6 +41,7 @@ func New() *Archiver {
 		logFile:       LOG_FILE,
 		archiveDir:    ARCHIVE_DIR,
 		stateFile:     STATE_FILE,
+		positionFile:  POSITION_FILE,
 		tempHourlyLog: TEMP_HOURLY_LOG,
 		localLogFile:  filepath.Join(workDir, "archiver.log"),
 	}
@@ -54,44 +57,42 @@ func (a *Archiver) RunArchiving() error {
 		return fmt.Errorf("ошибка создания директории %s: %v", a.archiveDir, err)
 	}
 
-	// Получаем общее количество строк в файле логов
-	countStart := time.Now()
-	totalLines, err := a.countLines(a.logFile)
+	// Получаем текущий размер файла
+	fileInfo, err := os.Stat(a.logFile)
 	if err != nil {
-		return fmt.Errorf("ошибка подсчета строк в %s: %v", a.logFile, err)
+		return fmt.Errorf("ошибка получения информации о файле %s: %v", a.logFile, err)
 	}
-	countDuration := time.Since(countStart)
-	a.logInfo(fmt.Sprintf("Подсчет строк выполнен за %v", countDuration))
-	a.logPerformance("COUNT_LINES", countDuration, fmt.Sprintf("Обработано %d строк", totalLines))
+	currentSize := fileInfo.Size()
 
-	// Получаем номер последней обработанной строки
-	lastLine := a.getLastProcessedLine()
+	// Получаем позицию последней обработанной строки
+	lastPosition := a.getLastProcessedPosition()
 
-	// Если файл логов был сброшен (очищен), начинаем с начала
-	if totalLines < lastLine {
-		a.logInfo(fmt.Sprintf("Файл был очищен (было %d строк, стало %d), начинаем с начала", lastLine, totalLines))
-		lastLine = 0
+	// Если файл был очищен (стал меньше), начинаем с начала
+	if currentSize < lastPosition {
+		a.logInfo(fmt.Sprintf("Файл был очищен (было %d байт, стало %d), начинаем с начала", lastPosition, currentSize))
+		lastPosition = 0
 	}
 
-	// Вычисляем количество новых строк
-	newLines := totalLines - lastLine
+	// Вычисляем количество новых байт
+	newBytes := currentSize - lastPosition
 
 	// Извлекаем новые строки и добавляем во временный файл-накопитель
-	if newLines > 0 {
+	if newBytes > 0 {
 		extractStart := time.Now()
-		if err := a.appendNewLinesToTempFile(newLines, lastLine); err != nil {
+		linesProcessed, err := a.appendNewLinesFromPosition(lastPosition)
+		if err != nil {
 			return fmt.Errorf("ошибка добавления новых строк: %v", err)
 		}
 		extractDuration := time.Since(extractStart)
-		a.logInfo(fmt.Sprintf("Добавлено %d новых строк во временный накопитель за %v", newLines, extractDuration))
-		a.logPerformance("EXTRACT_LINES", extractDuration, fmt.Sprintf("Извлечено %d новых строк", newLines))
+		a.logInfo(fmt.Sprintf("Добавлено %d новых строк (%d байт) во временный накопитель за %v", linesProcessed, newBytes, extractDuration))
+		a.logPerformance("EXTRACT_LINES", extractDuration, fmt.Sprintf("Извлечено %d строк из %d байт", linesProcessed, newBytes))
 	} else {
 		a.logInfo("Новых записей для добавления в накопитель не найдено.")
 	}
 
-	// Обновляем состояние - записываем номер последней обработанной строки
-	if err := a.updateLastProcessedLine(totalLines); err != nil {
-		return fmt.Errorf("ошибка обновления состояния: %v", err)
+	// Обновляем позицию - записываем текущий размер файла
+	if err := a.updateLastProcessedPosition(currentSize); err != nil {
+		return fmt.Errorf("ошибка обновления позиции: %v", err)
 	}
 
 	// Проверяем текущую минуту. Если это 00-я минута, архивируем накопитель.
@@ -114,85 +115,49 @@ func (a *Archiver) RunArchiving() error {
 
 	// Логируем статистику производительности
 	duration := time.Since(startTime)
-	performanceStats := fmt.Sprintf("Процесс архивирования завершен за %v. Обработано строк: %d, новых строк: %d",
-		duration, totalLines, newLines)
+	performanceStats := fmt.Sprintf("Процесс архивирования завершен за %v. Обработано байт: %d, новых байт: %d",
+		duration, currentSize, newBytes)
 	a.logInfo(performanceStats)
-	a.logPerformance("TOTAL_RUN", duration, fmt.Sprintf("Обработано %d строк, новых %d", totalLines, newLines))
+	a.logPerformance("TOTAL_RUN", duration, fmt.Sprintf("Обработано %d байт, новых %d", currentSize, newBytes))
 	fmt.Printf("Архивирование завершено успешно! Время выполнения: %v\n", duration)
 	return nil
 }
 
-func (a *Archiver) countLines(filename string) (int, error) {
-	// Используем размер файла для быстрого подсчета приблизительного количества строк
-	// Это намного быстрее чем чтение всего файла построчно
-	stat, err := os.Stat(filename)
-	if err != nil {
-		return 0, err
-	}
-
-	// Приблизительная оценка: средняя строка лога ~100-150 байт
-	// Для точности читаем первые 1000 строк и вычисляем средний размер
-	avgLineSize, err := a.calculateAverageLineSize(filename)
-	if err != nil {
-		// Если не удалось вычислить, используем консервативную оценку
-		avgLineSize = 120
-	}
-
-	estimatedLines := int(stat.Size() / avgLineSize)
-	a.logInfo(fmt.Sprintf("Размер файла: %d байт, примерное количество строк: %d", stat.Size(), estimatedLines))
-	return estimatedLines, nil
-}
-
-func (a *Archiver) calculateAverageLineSize(filename string) (int64, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	totalSize := int64(0)
-	lineCount := 0
-	maxLines := 1000 // Читаем только первые 1000 строк для расчета
-
-	for scanner.Scan() && lineCount < maxLines {
-		totalSize += int64(len(scanner.Bytes()) + 1) // +1 для символа новой строки
-		lineCount++
-	}
-
-	if lineCount == 0 {
-		return 120, nil // Значение по умолчанию
-	}
-
-	return totalSize / int64(lineCount), scanner.Err()
-}
-
-func (a *Archiver) getLastProcessedLine() int {
-	data, err := os.ReadFile(a.stateFile)
+func (a *Archiver) getLastProcessedPosition() int64 {
+	data, err := os.ReadFile(a.positionFile)
 	if err != nil {
 		return 0
 	}
 
-	lineStr := strings.TrimSpace(string(data))
-	lastLine, err := strconv.Atoi(lineStr)
+	posStr := strings.TrimSpace(string(data))
+	lastPos, err := strconv.ParseInt(posStr, 10, 64)
 	if err != nil {
 		return 0
 	}
-	return lastLine
+	return lastPos
 }
 
-func (a *Archiver) appendNewLinesToTempFile(newLines, lastLine int) error {
+func (a *Archiver) updateLastProcessedPosition(position int64) error {
+	return os.WriteFile(a.positionFile, []byte(fmt.Sprintf("%d", position)), 0644)
+}
+
+func (a *Archiver) appendNewLinesFromPosition(startPosition int64) (int, error) {
 	// Открываем основной лог файл
 	logFile, err := os.Open(a.logFile)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer logFile.Close()
+
+	// Переходим к позиции последней обработанной строки
+	if _, err := logFile.Seek(startPosition, 0); err != nil {
+		return 0, err
+	}
 
 	// Открываем временный файл для добавления
 	tempFile, err := os.OpenFile(a.tempHourlyLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tempFile.Close()
 
@@ -201,34 +166,17 @@ func (a *Archiver) appendNewLinesToTempFile(newLines, lastLine int) error {
 	defer writer.Flush()
 
 	scanner := bufio.NewScanner(logFile)
-	currentLine := 0
-	linesToSkip := lastLine
-	linesToTake := newLines
 	linesWritten := 0
 
-	// Пропускаем уже обработанные строки
-	for scanner.Scan() && currentLine < linesToSkip {
-		currentLine++
-	}
-
-	// Обрабатываем новые строки
-	for scanner.Scan() && linesWritten < linesToTake {
+	// Читаем только новые строки (с позиции startPosition до конца файла)
+	for scanner.Scan() {
 		if _, err := writer.WriteString(scanner.Text() + "\n"); err != nil {
-			return err
+			return linesWritten, err
 		}
 		linesWritten++
 	}
 
-	// Проверяем, не осталось ли строк (файл мог увеличиться)
-	if linesWritten < linesToTake {
-		a.logInfo(fmt.Sprintf("Обработано %d строк из ожидаемых %d (файл мог увеличиться)", linesWritten, linesToTake))
-	}
-
-	return scanner.Err()
-}
-
-func (a *Archiver) updateLastProcessedLine(totalLines int) error {
-	return os.WriteFile(a.stateFile, []byte(fmt.Sprintf("%d", totalLines)), 0644)
+	return linesWritten, scanner.Err()
 }
 
 func (a *Archiver) archiveHourlyLog() error {
