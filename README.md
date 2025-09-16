@@ -17,6 +17,19 @@ cd 3xui_dns_log/merge_logs
 go run main.go
 ```
 
+# Если нужно обновить
+
+- Запускаем 
+
+```bash
+cd ~/tools/3xui_dns_log/archive_logs
+go run main.go
+$ sudo cp /root/tools/3xui_dns_log/archive_logs/xui_log_archiver /usr/local/bin/xui_log_archiver
+chmod +x /usr/local/bin/xui_log_archiver
+```
+- На этапе `go run main.go` выбрать 3, потом 2 пункт
+
+
 ## 📋 Что умеет
 
 ### 1. 🔄 X-UI Log Archiver
