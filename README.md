@@ -29,6 +29,9 @@ chmod +x /usr/local/bin/xui_log_archiver
 ```
 - На этапе `go run main.go` выбрать 3, потом 2 пункт
 
+# Логирование
+`/usr/local/x-ui/archives/archive.log` - основной лог 
+`/root/tools/3xui_dns_log/archive_logs/archiver.log` - детальный лог производительности
 
 ## 📋 Что умеет
 
